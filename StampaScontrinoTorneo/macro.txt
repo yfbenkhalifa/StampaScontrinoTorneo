@@ -1,0 +1,654 @@
+Option Explicit
+
+' ================================================================
+'  CONFIGURAZIONE – FOGLI E CELLE
+'  Modifica questa sezione per adattare il file al tuo workbook.
+' ================================================================
+
+' -- Foglio Config (contatore comande) --
+Const NOME_FOGLIO_CONFIG        As String = "Config"
+Const CELLA_ULTIMO_NUMERO_COMANDA As String = "B1"
+
+' -- Foglio Prodotti (tabella prezzi/categorie) --
+Const NOME_FOGLIO_PRODOTTI      As String = "Prodotti"
+Const NOME_TABELLA_PRODOTTI     As String = "tblProdotti"
+Const COL_PRODOTTI_CATEGORIA    As Long = 3               ' Colonna C = Categoria
+
+' -- Foglio Cassa (vendita corrente) --
+Const NOME_FOGLIO_CASSA         As String = "Cassa"
+Const PRIMA_RIGA_VENDITA_CORRENTE_CASSA As Long = 2
+Const COL_PRODOTTO_CASSA        As String = "E"
+Const COL_QTA_CASSA             As String = "F"
+Const COL_PREZZO_UNITARIO_CASSA As String = "G"
+Const COL_SUBTOTALE_CASSA       As String = "H"
+Const CELLA_TOTALE_VENDITA_CORRENTE_CASSA As String = "H21"
+Const CELLA_IMPORTO_PAGATO_CASSA As String = "H22"
+
+' -- Foglio Vendite (storico) --
+Const NOME_FOGLIO_VENDITE       As String = "Vendite"
+Const PRIMA_RIGA_DATI_VENDITE   As Long = 2
+Const COL_NUM_COMANDA_VENDITE   As Long = 6
+
+' -- Foglio Comanda (template di stampa) --
+Const NOME_FOGLIO_COMANDA       As String = "Comanda"
+Const CELLA_COMANDA_TITOLO_DEST As String = "A2"
+Const CELLA_COMANDA_NUMERO_DEST As String = "B3"
+Const CELLA_COMANDA_DATAORA_DEST As String = "D3"
+Const PRIMA_RIGA_ITEM_COMANDA   As Long = 6
+Const COL_COMANDA_PRODOTTO      As Long = 1
+Const COL_COMANDA_QTA           As Long = 2
+Const COL_COMANDA_PREZZO_UN     As Long = 3
+Const COL_COMANDA_SUBTOTALE     As Long = 4
+Const RANGE_CLEAR_COMANDA_ITEMS As String = "A6:D17"
+Const CELLA_COMANDA_TOTALE_DEST As String = "D18"
+
+' -- Foglio ComandaNumero (stampa extra) --
+Const NOME_FOGLIO_COMANDA_NUMERO     As String = "ComandaNumero"
+Const CELLA_COMANDA_NUMERO_SOLO_DEST As String = "A1"
+Const CELLA_COMANDA_DATAORA_SOLO_DEST As String = "A2"
+
+' -- Checkbox salse (foglio Cassa) --
+Const CELLA_CHECK_KETCHUP  As String = "AB1"
+Const CELLA_CHECK_MAIONESE As String = "AB2"
+Const CELLA_CHECK_SENAPE   As String = "AB3"
+
+' -- Percorso EXE di stampa --
+Const PERCORSO_EXE_STAMPA As String = _
+	"C:\Users\WiZ\Desktop\StampaScontrino\StampaScontrinoTorneo\x64\Debug\StampaScontrinoTorneo.exe"
+
+' ================================================================
+'  CONFIGURAZIONE – FONT DI STAMPA
+'  Formato: "W,H" dove W = larghezza (0-7), H = altezza (0-7)
+'  0 = 1x, 1 = 2x, 2 = 3x, ... 7 = 8x
+' ================================================================
+Const FONT_INTESTAZIONE As String = "1,1"   ' Numero comanda nell'intestazione  (2x2)
+Const FONT_DETTAGLI     As String = "0,1"   ' Titolo comanda, data, separatori  (1x2)
+Const FONT_ORDINE       As String = "1,1"   ' Testo "Ordine N. ###"             (2x2)
+Const FONT_ITEMS        As String = "0,0"   ' Righe prodotti                     (1x1)
+Const FONT_TOTALE       As String = "0,1"   ' Riga totale                        (1x2)
+
+
+' ================================================================
+'  SEZIONE 1 – FUNZIONI DI UTILITA'
+' ================================================================
+
+' Cerca il prezzo di un prodotto nella tabella tblProdotti.
+' Ritorna il prezzo (>= 0) oppure -1 se non trovato/errore.
+Private Function GetProductPrice(productName As String) As Currency
+	Dim wsProdotti As Worksheet
+	Dim tblProdotti As ListObject
+	Dim i As Long
+
+	On Error GoTo ErrHandler
+
+	Set wsProdotti = ThisWorkbook.Sheets(NOME_FOGLIO_PRODOTTI)
+	Set tblProdotti = wsProdotti.ListObjects(NOME_TABELLA_PRODOTTI)
+
+	For i = 1 To tblProdotti.ListRows.Count
+		If LCase(Trim(tblProdotti.DataBodyRange.Cells(i, 1).Value)) = LCase(Trim(productName)) Then
+			GetProductPrice = CCur(tblProdotti.DataBodyRange.Cells(i, 2).Value)
+			Exit Function
+		End If
+	Next i
+
+	MsgBox "Prodotto '" & productName & "' non trovato nella tabella '" & NOME_TABELLA_PRODOTTI & "'.", vbInformation
+	GetProductPrice = -1
+	Exit Function
+
+ErrHandler:
+	MsgBox "Errore nel trovare il prodotto/prezzo: " & Err.Description, vbCritical
+	GetProductPrice = -1
+End Function
+
+' Cerca la categoria di un prodotto nella tabella tblProdotti.
+' Ritorna la stringa categoria oppure "Sconosciuta"/"ErroreCat".
+Private Function GetProductCategory(productName As String) As String
+	Dim wsProdotti As Worksheet
+	Dim tblProdotti As ListObject
+	Dim i As Long
+
+	GetProductCategory = "Sconosciuta"
+
+	On Error GoTo ErrHandler
+
+	Set wsProdotti = ThisWorkbook.Sheets(NOME_FOGLIO_PRODOTTI)
+
+	On Error Resume Next
+	Set tblProdotti = wsProdotti.ListObjects(NOME_TABELLA_PRODOTTI)
+	On Error GoTo ErrHandler
+
+	If Not tblProdotti Is Nothing Then
+		For i = 1 To tblProdotti.ListRows.Count
+			If LCase(Trim(CStr(tblProdotti.DataBodyRange.Cells(i, 1).Value))) = LCase(Trim(productName)) Then
+				GetProductCategory = CStr(tblProdotti.DataBodyRange.Cells(i, COL_PRODOTTI_CATEGORIA).Value)
+				Exit Function
+			End If
+		Next i
+	Else
+		Dim lastRow As Long, cell As Range
+		lastRow = wsProdotti.Cells(Rows.Count, "A").End(xlUp).Row
+		For Each cell In wsProdotti.Range("A1:A" & lastRow)
+			If LCase(Trim(CStr(cell.Value))) = LCase(Trim(productName)) Then
+				GetProductCategory = CStr(wsProdotti.Cells(cell.Row, COL_PRODOTTI_CATEGORIA).Value)
+				Exit Function
+			End If
+		Next cell
+	End If
+	Exit Function
+
+ErrHandler:
+	Debug.Print "Errore in GetProductCategory per '" & productName & "': " & Err.Description
+	GetProductCategory = "ErroreCat"
+End Function
+
+' Genera un tag font dinamico per il file di stampa: @@FONT:W,H@@
+Private Function FontTag(ByVal fontConst As String) As String
+	FontTag = "@@FONT:" & fontConst & "@@" & vbCrLf
+End Function
+
+' Verifica se un nome prodotto contiene una keyword (case-insensitive).
+Private Function ProdottoContiene(ByVal prodotto As String, ByVal keyword As String) As Boolean
+	ProdottoContiene = (InStr(1, LCase(prodotto), LCase(keyword)) > 0)
+End Function
+
+' Verifica se una riga cassa è un prodotto "Staff Birra".
+Private Function IsStaffBirra(ByVal prodotto As String) As Boolean
+	IsStaffBirra = ProdottoContiene(prodotto, "staff birra")
+End Function
+
+
+' ================================================================
+'  SEZIONE 2 – AGGIUNTA PRODOTTI ALLA CASSA
+' ================================================================
+
+' Aggiunge un prodotto (o incrementa la quantità) nella vendita corrente.
+Sub AddSpecificItemToSale(productName As String)
+	Dim productPrice As Currency
+	Dim wsCassa As Worksheet
+	Dim nextRowCassa As Long
+	Dim i As Long
+	Dim foundExisting As Boolean
+
+	productPrice = GetProductPrice(productName)
+	If productPrice < 0 Then Exit Sub
+
+	Set wsCassa = ThisWorkbook.Sheets(NOME_FOGLIO_CASSA)
+	foundExisting = False
+	nextRowCassa = wsCassa.Cells(Rows.Count, COL_PRODOTTO_CASSA).End(xlUp).Row
+
+	If nextRowCassa < PRIMA_RIGA_VENDITA_CORRENTE_CASSA Then
+		nextRowCassa = PRIMA_RIGA_VENDITA_CORRENTE_CASSA
+	Else
+		For i = PRIMA_RIGA_VENDITA_CORRENTE_CASSA To nextRowCassa
+			If wsCassa.Cells(i, COL_PRODOTTO_CASSA).Value = productName Then
+				wsCassa.Cells(i, COL_QTA_CASSA).Value = wsCassa.Cells(i, COL_QTA_CASSA).Value + 1
+				wsCassa.Cells(i, COL_PREZZO_UNITARIO_CASSA).NumberFormat = "#,##0.00 €"
+				wsCassa.Cells(i, COL_SUBTOTALE_CASSA).NumberFormat = "#,##0.00 €"
+				foundExisting = True
+				Exit For
+			End If
+		Next i
+		If Not foundExisting Then
+			If wsCassa.Cells(nextRowCassa, COL_PRODOTTO_CASSA).Value <> "" Then
+				nextRowCassa = nextRowCassa + 1
+			End If
+		End If
+	End If
+
+	If Not foundExisting Then
+		wsCassa.Cells(nextRowCassa, COL_PRODOTTO_CASSA).Value = productName
+		wsCassa.Cells(nextRowCassa, COL_QTA_CASSA).Value = 1
+		wsCassa.Cells(nextRowCassa, COL_PREZZO_UNITARIO_CASSA).Value = productPrice
+		wsCassa.Cells(nextRowCassa, COL_PREZZO_UNITARIO_CASSA).NumberFormat = "#,##0.00 €"
+		wsCassa.Cells(nextRowCassa, COL_SUBTOTALE_CASSA).FormulaR1C1 = "=RC[-2]*RC[-1]"
+		wsCassa.Cells(nextRowCassa, COL_SUBTOTALE_CASSA).NumberFormat = "#,##0.00 €"
+	End If
+
+	' Ricalcola subtotale della riga toccata
+	Dim targetRow As Long
+	If foundExisting Then targetRow = i Else targetRow = nextRowCassa
+	wsCassa.Cells(targetRow, COL_SUBTOTALE_CASSA).FormulaR1C1 = "=RC[-2]*RC[-1]"
+
+	wsCassa.Calculate
+End Sub
+
+' Controlla le checkbox salse e aggiunge gli extra selezionati.
+Sub ProcessCommonSauces()
+	Dim wsCassa As Worksheet
+	Set wsCassa = ThisWorkbook.Sheets(NOME_FOGLIO_CASSA)
+
+	If wsCassa.Range(CELLA_CHECK_KETCHUP).Value = True Then
+		Call AddSpecificItemToSale("Ketchup (extra)")
+		wsCassa.Range(CELLA_CHECK_KETCHUP).Value = False
+	End If
+	If wsCassa.Range(CELLA_CHECK_MAIONESE).Value = True Then
+		Call AddSpecificItemToSale("Maionese (extra)")
+		wsCassa.Range(CELLA_CHECK_MAIONESE).Value = False
+	End If
+	If wsCassa.Range(CELLA_CHECK_SENAPE).Value = True Then
+		Call AddSpecificItemToSale("Senape (extra)")
+		wsCassa.Range(CELLA_CHECK_SENAPE).Value = False
+	End If
+End Sub
+
+
+' ================================================================
+'  SEZIONE 3 – PULSANTI PRODOTTO
+'  Ogni Sub corrisponde a un pulsante sul foglio Cassa.
+' ================================================================
+
+Sub Pulsante_Birra_Click():              Call AddSpecificItemToSale("Birra"):              End Sub
+Sub Pulsante_MetroBirra_Click():         Call AddSpecificItemToSale("Metro Birra"):         End Sub
+Sub Pulsante_SOLOPASTIN_Click():         Call AddSpecificItemToSale("SOLO PASTIN"):         End Sub
+Sub Pulsante_PULLEDPORK_Click():         Call AddSpecificItemToSale("PULLED PORK"):         End Sub
+Sub Pulsante_PIZZETTA_Click():           Call AddSpecificItemToSale("PIZZETTA"):             End Sub
+Sub Pulsante_PANINOPORCHETTA_Click():    Call AddSpecificItemToSale("PANINO PORCHETTA"):    End Sub
+Sub Pulsante_PANINOFORMAGGIO_Click():    Call AddSpecificItemToSale("PANINO FORMAGGIO"):    End Sub
+Sub Pulsante_CocaCola_Click():           Call AddSpecificItemToSale("Coca Cola"):           End Sub
+Sub Pulsante_Fanta_Click():              Call AddSpecificItemToSale("Fanta"):               End Sub
+Sub Pulsante_The_Click():                Call AddSpecificItemToSale("The"):                 End Sub
+Sub Pulsante_Acqua_Click():              Call AddSpecificItemToSale("Acqua"):               End Sub
+Sub Pulsante_BicchiereVino_Click():      Call AddSpecificItemToSale("Bicchiere Vino"):      End Sub
+Sub Pulsante_Spritz_Click():             Call AddSpecificItemToSale("Spritz"):              End Sub
+Sub Pulsante_Caffe_Click():              Call AddSpecificItemToSale("Caffè"):               End Sub
+Sub Pulsante_StaffBirra_Click():         Call AddSpecificItemToSale("Staff Birra"):         End Sub
+Sub Pulsante_AggiungiCipollaPastin_Click(): Call AddSpecificItemToSale("Cipolla (per Pastin)"): End Sub
+Sub Pulsante_AggiungiPeperoniPastin_Click(): Call AddSpecificItemToSale("Peperoni (per Pastin)"): End Sub
+Sub Pulsante_PASTINCIPePEP_Click():      Call AddSpecificItemToSale("PASTIN CIP e PEP"):   End Sub
+Sub Pulsante_PASTINCIPOLLA_Click():      Call AddSpecificItemToSale("PASTIN CIPOLLA"):      End Sub
+Sub Pulsante_PASTINPEPERONI_Click():     Call AddSpecificItemToSale("PASTIN PEPERONI"):     End Sub
+Sub Pulsante_StincoePatate_Click():      Call AddSpecificItemToSale("Stinco e Patate"):     End Sub
+Sub Pulsante_FOCACCIAA_Click():          Call AddSpecificItemToSale("FOCACCIA A"):          End Sub
+Sub Pulsante_FOCACCIAB_Click():          Call AddSpecificItemToSale("FOCACCIA B"):          End Sub
+Sub Pulsante_FOCACCIAC_Click():          Call AddSpecificItemToSale("FOCACCIA C"):          End Sub
+
+Sub Pulsante_PATATEFRITTE_Click()
+	Call AddSpecificItemToSale("PATATE FRITTE")
+	Call ProcessCommonSauces
+End Sub
+
+
+' ================================================================
+'  SEZIONE 4 – FINALIZZA VENDITA
+' ================================================================
+
+' Prepara il foglio Comanda con gli articoli filtrati e ne estrae il testo.
+' Parametri:
+'   titolo       – titolo comanda ("COMANDA CUCINA", "COMANDA STINCO", ...)
+'   filterMode   – "category" per filtrare per categoria, "keyword" per keyword nel nome
+'   filterValue  – valore del filtro ("cibo", "stinco", "focaccia", "bere")
+'   excludeWords – array di keyword da escludere (es. Array("stinco","focaccia","staff birra"))
+Private Function BuildComandaText( _
+		ByVal wsComanda As Worksheet, _
+		ByVal wsCassa As Worksheet, _
+		ByVal lastRowCassa As Long, _
+		ByVal currentOrderNumber As Long, _
+		ByVal currentDateTime As Date, _
+		ByVal titolo As String, _
+		ByVal filterMode As String, _
+		ByVal filterValue As String, _
+		ByVal excludeWords As Variant _
+	) As String
+
+	Dim i As Long, nextRow As Long
+	Dim prodotto As String, totale As Currency
+	Dim include As Boolean, ex As Long
+
+	' Pulisci e prepara il foglio Comanda
+	wsComanda.Range(RANGE_CLEAR_COMANDA_ITEMS).ClearContents
+	wsComanda.Range(CELLA_COMANDA_TITOLO_DEST).Value = titolo
+	wsComanda.Range("B3").Value = currentOrderNumber
+	wsComanda.Range(CELLA_COMANDA_DATAORA_DEST).Value = currentDateTime
+	wsComanda.Range(CELLA_COMANDA_DATAORA_DEST).NumberFormat = "dd/mm/yyyy hh:mm:ss"
+
+	nextRow = PRIMA_RIGA_ITEM_COMANDA
+	totale = 0
+
+	For i = PRIMA_RIGA_VENDITA_CORRENTE_CASSA To lastRowCassa
+		prodotto = Trim(CStr(wsCassa.Cells(i, COL_PRODOTTO_CASSA).Value))
+		If prodotto = "" Then GoTo NextItem
+
+		' Determina se l'articolo passa il filtro
+		include = False
+		If filterMode = "category" Then
+			include = (LCase(GetProductCategory(prodotto)) = LCase(filterValue))
+		ElseIf filterMode = "keyword" Then
+			include = ProdottoContiene(prodotto, filterValue)
+		End If
+		If Not include Then GoTo NextItem
+
+		' Applica esclusioni
+		If IsArray(excludeWords) Then
+			For ex = LBound(excludeWords) To UBound(excludeWords)
+				If ProdottoContiene(prodotto, CStr(excludeWords(ex))) Then
+					include = False
+					Exit For
+				End If
+			Next ex
+		End If
+		If Not include Then GoTo NextItem
+
+		' Scrivi la riga sulla comanda
+		wsComanda.Cells(nextRow, COL_COMANDA_PRODOTTO).Value = Replace(prodotto, "*", "")
+		wsComanda.Cells(nextRow, COL_COMANDA_QTA).Value = wsCassa.Cells(i, COL_QTA_CASSA).Value
+		wsComanda.Cells(nextRow, COL_COMANDA_PREZZO_UN).Value = wsCassa.Cells(i, COL_PREZZO_UNITARIO_CASSA).Value
+		wsComanda.Cells(nextRow, COL_COMANDA_SUBTOTALE).Value = wsCassa.Cells(i, COL_SUBTOTALE_CASSA).Value
+		totale = totale + wsCassa.Cells(i, COL_SUBTOTALE_CASSA).Value
+		nextRow = nextRow + 1
+
+NextItem:
+	Next i
+
+	wsComanda.Range(CELLA_COMANDA_TOTALE_DEST).Value = totale
+
+	' Se nessun articolo è stato scritto, ritorna stringa vuota
+	If nextRow = PRIMA_RIGA_ITEM_COMANDA Then
+		BuildComandaText = ""
+	Else
+		BuildComandaText = EstraiContenutoComanda(wsComanda)
+	End If
+End Function
+
+' Accoda il testo di una comanda secondaria (separata da "====") a un testo principale.
+Private Function AppendComandaText(ByVal base As String, ByVal extra As String) As String
+	If base <> "" And extra <> "" Then
+		AppendComandaText = base & vbCrLf & "====" & vbCrLf & extra
+	ElseIf extra <> "" Then
+		AppendComandaText = extra
+	Else
+		AppendComandaText = base
+	End If
+End Function
+
+Sub FinalizzaVendita()
+	Dim wsCassa As Worksheet, wsVendite As Worksheet
+	Dim wsConfig As Worksheet, wsComanda As Worksheet
+	Dim lastRowCassa As Long, i As Long, r As Long
+	Dim currentDateTime As Date, nextRowVendite As Long
+	Dim saleHasItems As Boolean
+	Dim lastOrderNumber As Long, currentOrderNumber As Long
+	Dim productName As String
+	Dim hasFood As Boolean, hasDrinks As Boolean
+	Dim hasStinco As Boolean, hasFocaccia As Boolean
+	Dim printComanda As Boolean
+	Dim comandaNumToSave As Variant
+	Dim testoComandaCibo As String, testoComandaBevande As String
+
+	Set wsCassa = ThisWorkbook.Sheets(NOME_FOGLIO_CASSA)
+	Set wsVendite = ThisWorkbook.Sheets(NOME_FOGLIO_VENDITE)
+
+	' --- Verifica che ci siano articoli ---
+	lastRowCassa = wsCassa.Cells(Rows.Count, COL_PRODOTTO_CASSA).End(xlUp).Row
+	saleHasItems = False
+	If lastRowCassa >= PRIMA_RIGA_VENDITA_CORRENTE_CASSA Then
+		For r = PRIMA_RIGA_VENDITA_CORRENTE_CASSA To lastRowCassa
+			If Trim(CStr(wsCassa.Cells(r, COL_PRODOTTO_CASSA).Value)) <> "" Then
+				saleHasItems = True
+				Exit For
+			End If
+		Next r
+	End If
+	If Not saleHasItems Then
+		MsgBox "Nessun prodotto aggiunto alla vendita corrente.", vbInformation
+		Exit Sub
+	End If
+
+	' --- Decide se stampare (tutto Staff Birra = no stampa) ---
+	printComanda = False
+	For r = PRIMA_RIGA_VENDITA_CORRENTE_CASSA To lastRowCassa
+		If Trim(CStr(wsCassa.Cells(r, COL_PRODOTTO_CASSA).Value)) <> "" Then
+			If Not IsStaffBirra(CStr(wsCassa.Cells(r, COL_PRODOTTO_CASSA).Value)) Then
+				printComanda = True
+				Exit For
+			End If
+		End If
+	Next r
+
+	currentDateTime = Now()
+	currentOrderNumber = 0
+
+	' --- Incrementa numero comanda ---
+	If printComanda Then
+		On Error Resume Next
+		Set wsConfig = ThisWorkbook.Sheets(NOME_FOGLIO_CONFIG)
+		If wsConfig Is Nothing Then
+			MsgBox "Foglio Config non trovato!", vbCritical
+			printComanda = False
+		Else
+			lastOrderNumber = 0
+			If IsNumeric(wsConfig.Range(CELLA_ULTIMO_NUMERO_COMANDA).Value) Then
+				lastOrderNumber = CLng(wsConfig.Range(CELLA_ULTIMO_NUMERO_COMANDA).Value)
+			End If
+			currentOrderNumber = lastOrderNumber + 1
+			wsConfig.Range(CELLA_ULTIMO_NUMERO_COMANDA).Value = currentOrderNumber
+		End If
+		On Error GoTo 0
+	End If
+
+	' --- Classifica gli articoli presenti ---
+	If printComanda Then
+		hasFood = False: hasDrinks = False: hasStinco = False: hasFocaccia = False
+
+		For i = PRIMA_RIGA_VENDITA_CORRENTE_CASSA To lastRowCassa
+			productName = Trim(CStr(wsCassa.Cells(i, COL_PRODOTTO_CASSA).Value))
+			If productName = "" Then GoTo NextClassify
+
+			If ProdottoContiene(productName, "stinco") Then
+				hasStinco = True
+			ElseIf ProdottoContiene(productName, "focaccia") Then
+				hasFocaccia = True
+			ElseIf Not IsStaffBirra(productName) Then
+				Select Case LCase(GetProductCategory(productName))
+					Case "cibo": hasFood = True
+					Case "bere": hasDrinks = True
+				End Select
+			End If
+NextClassify:
+		Next i
+
+		Set wsComanda = ThisWorkbook.Sheets(NOME_FOGLIO_COMANDA)
+		testoComandaCibo = ""
+		testoComandaBevande = ""
+
+		' --- Costruisci le comande per ogni tipologia ---
+		If hasFood Then
+			testoComandaCibo = BuildComandaText(wsComanda, wsCassa, lastRowCassa, _
+				currentOrderNumber, currentDateTime, _
+				"COMANDA CUCINA", "category", "cibo", _
+				Array("stinco", "focaccia", "staff birra"))
+		End If
+
+		If hasStinco Then
+			Dim txtStinco As String
+			txtStinco = BuildComandaText(wsComanda, wsCassa, lastRowCassa, _
+				currentOrderNumber, currentDateTime, _
+				"COMANDA STINCO", "keyword", "stinco", Empty)
+			testoComandaCibo = AppendComandaText(testoComandaCibo, txtStinco)
+		End If
+
+		If hasFocaccia Then
+			Dim txtFocaccia As String
+			txtFocaccia = BuildComandaText(wsComanda, wsCassa, lastRowCassa, _
+				currentOrderNumber, currentDateTime, _
+				"COMANDA FOCACCE", "keyword", "focaccia", Empty)
+			testoComandaCibo = AppendComandaText(testoComandaCibo, txtFocaccia)
+		End If
+
+		If hasDrinks Then
+			testoComandaBevande = BuildComandaText(wsComanda, wsCassa, lastRowCassa, _
+				currentOrderNumber, currentDateTime, _
+				"COMANDA BEVANDE", "category", "bere", _
+				Array("staff birra"))
+		End If
+	End If
+
+	' --- Registra tutto nel foglio Vendite ---
+	If printComanda Then comandaNumToSave = currentOrderNumber Else comandaNumToSave = ""
+
+	nextRowVendite = wsVendite.Cells(Rows.Count, 1).End(xlUp).Row
+	If wsVendite.Cells(nextRowVendite, 1).Value <> "" Or nextRowVendite < PRIMA_RIGA_DATI_VENDITE Then
+		If wsVendite.Cells(1, 1).Value = "" And PRIMA_RIGA_DATI_VENDITE = 1 Then
+			nextRowVendite = 1
+		ElseIf wsVendite.Cells(PRIMA_RIGA_DATI_VENDITE, 1).Value = "" Then
+			nextRowVendite = PRIMA_RIGA_DATI_VENDITE
+		Else
+			nextRowVendite = nextRowVendite + 1
+		End If
+	End If
+
+	For i = PRIMA_RIGA_VENDITA_CORRENTE_CASSA To lastRowCassa
+		If Trim(CStr(wsCassa.Cells(i, COL_PRODOTTO_CASSA).Value)) <> "" Then
+			wsVendite.Cells(nextRowVendite, 1).Value = currentDateTime
+			wsVendite.Cells(nextRowVendite, 1).NumberFormat = "dd/mm/yyyy hh:mm:ss"
+			wsVendite.Cells(nextRowVendite, 2).Value = wsCassa.Cells(i, COL_PRODOTTO_CASSA).Value
+			wsVendite.Cells(nextRowVendite, 3).Value = wsCassa.Cells(i, COL_QTA_CASSA).Value
+			wsVendite.Cells(nextRowVendite, 4).Value = wsCassa.Cells(i, COL_PREZZO_UNITARIO_CASSA).Value
+			wsVendite.Cells(nextRowVendite, 4).NumberFormat = "#,##0.00 €"
+			wsVendite.Cells(nextRowVendite, 5).Value = wsCassa.Cells(i, COL_SUBTOTALE_CASSA).Value
+			wsVendite.Cells(nextRowVendite, 5).NumberFormat = "#,##0.00 €"
+			wsVendite.Cells(nextRowVendite, 6).Value = comandaNumToSave
+			nextRowVendite = nextRowVendite + 1
+		End If
+	Next i
+
+	' --- Pulisci la cassa ---
+	wsCassa.Range(COL_PRODOTTO_CASSA & PRIMA_RIGA_VENDITA_CORRENTE_CASSA & _
+				  ":" & COL_SUBTOTALE_CASSA & lastRowCassa).ClearContents
+	wsCassa.Range(CELLA_IMPORTO_PAGATO_CASSA).ClearContents
+	wsCassa.Calculate
+
+	' --- Invia in stampa ---
+	If printComanda Then
+		Dim wsComandaNumero As Worksheet
+		On Error Resume Next
+		Set wsComandaNumero = ThisWorkbook.Sheets(NOME_FOGLIO_COMANDA_NUMERO)
+		If Err.Number = 0 Then
+			wsComandaNumero.Range(CELLA_COMANDA_NUMERO_SOLO_DEST).Value = "comanda cucina " & currentOrderNumber
+			wsComandaNumero.Range(CELLA_COMANDA_DATAORA_SOLO_DEST).Value = currentDateTime
+		End If
+		On Error GoTo 0
+
+		Call ScriviFileComandaTesto(currentOrderNumber, currentDateTime, testoComandaCibo, testoComandaBevande)
+	End If
+
+	ThisWorkbook.Sheets(NOME_FOGLIO_CASSA).Activate
+End Sub
+
+
+' ================================================================
+'  SEZIONE 5 – ANNULLA VENDITA
+' ================================================================
+
+Sub AnnullaVenditaCorrente()
+	Dim wsCassa As Worksheet
+	Dim lastRowCassa As Long
+
+	If MsgBox("Sei sicuro di voler annullare la vendita corrente?", _
+			  vbYesNo + vbQuestion, "Conferma Annullamento") = vbNo Then Exit Sub
+
+	Set wsCassa = ThisWorkbook.Sheets(NOME_FOGLIO_CASSA)
+	lastRowCassa = wsCassa.Cells(Rows.Count, COL_PRODOTTO_CASSA).End(xlUp).Row
+
+	If lastRowCassa >= PRIMA_RIGA_VENDITA_CORRENTE_CASSA Then
+		wsCassa.Range(COL_PRODOTTO_CASSA & PRIMA_RIGA_VENDITA_CORRENTE_CASSA & _
+					  ":" & COL_SUBTOTALE_CASSA & lastRowCassa).ClearContents
+	End If
+
+	wsCassa.Range(CELLA_IMPORTO_PAGATO_CASSA).ClearContents
+	wsCassa.Calculate
+
+	MsgBox "Vendita corrente annullata.", vbInformation
+	ThisWorkbook.Sheets(NOME_FOGLIO_CASSA).Activate
+End Sub
+
+
+' ================================================================
+'  SEZIONE 6 – GENERAZIONE FILE TESTO E STAMPA
+' ================================================================
+
+' Scrive il file .txt con il contenuto delle comande e lancia l'EXE di stampa.
+Sub ScriviFileComandaTesto( _
+		ByVal numeroComanda As Long, _
+		ByVal dataOra As Date, _
+		ByVal testoCibo As String, _
+		ByVal testoBevande As String)
+
+	Dim percorso As String, f As Integer, testo As String
+
+	testo = ""
+	If testoCibo <> "" Then testo = testo & testoCibo & vbCrLf & "====" & vbCrLf
+	If testoBevande <> "" Then testo = testo & testoBevande
+
+	percorso = Environ$("USERPROFILE") & "\Desktop\Comande\Comanda" & numeroComanda & ".txt"
+	f = FreeFile
+	Open percorso For Output As #f
+	Print #f, testo
+	Close #f
+
+	' Stampa reale
+	Shell """" & PERCORSO_EXE_STAMPA & """ """ & percorso & """", vbHide
+End Sub
+
+' Costruisce il testo formattato di una singola comanda dal foglio Comanda.
+Function EstraiContenutoComanda(ws As Worksheet) As String
+	Dim testo As String
+	Dim rigaCorrente As Long
+	Dim prodotto As String, qta As Variant, subtotale As Variant
+	Dim totaleComanda As Variant
+	Dim parteSinistra As String, parteDestra As String
+	Dim spaziMancanti As Integer
+
+	Const LARGHEZZA_SCONTRINO As Integer = 32
+
+	' --- Intestazione centrata: numero + titolo ---
+	testo = "@@CENTER@@" & vbCrLf
+	testo = testo & FontTag(FONT_INTESTAZIONE)
+	testo = testo & "N. " & ws.Range("B3").Value & vbCrLf
+	testo = testo & FontTag(FONT_DETTAGLI)
+	testo = testo & ws.Range(CELLA_COMANDA_TITOLO_DEST).Value & vbCrLf
+	testo = testo & "@@LEFT@@" & vbCrLf
+
+	' --- Ordine e data ---
+	testo = testo & FontTag(FONT_DETTAGLI)
+	testo = testo & "================================" & vbCrLf
+	testo = testo & FontTag(FONT_ORDINE)
+	testo = testo & "Ordine N. " & ws.Range("B3").Value & vbCrLf
+	testo = testo & FontTag(FONT_DETTAGLI)
+	testo = testo & "Data " & Format(ws.Range(CELLA_COMANDA_DATAORA_DEST).Value, "dd/mm HH:MM") & vbCrLf
+
+	' --- Intestazione colonne ---
+	testo = testo & FontTag(FONT_ITEMS)
+	testo = testo & "--------------------------------" & vbCrLf
+	testo = testo & "QTA  PRODOTTO             PREZZO" & vbCrLf
+	testo = testo & "--------------------------------" & vbCrLf
+
+	' --- Lista prodotti ---
+	rigaCorrente = PRIMA_RIGA_ITEM_COMANDA
+	Do While Trim(ws.Cells(rigaCorrente, COL_COMANDA_PRODOTTO).Value) <> ""
+		prodotto = ws.Cells(rigaCorrente, COL_COMANDA_PRODOTTO).Value
+		qta = ws.Cells(rigaCorrente, COL_COMANDA_QTA).Value
+		subtotale = ws.Cells(rigaCorrente, COL_COMANDA_SUBTOTALE).Value
+
+		parteSinistra = " " & qta & "   " & prodotto
+		parteDestra = Format(subtotale, "0.00 \€")
+		spaziMancanti = LARGHEZZA_SCONTRINO - Len(parteSinistra) - Len(parteDestra)
+		If spaziMancanti < 1 Then spaziMancanti = 1
+
+		testo = testo & parteSinistra & Space(spaziMancanti) & parteDestra & vbCrLf
+		rigaCorrente = rigaCorrente + 1
+	Loop
+
+	' --- Totale ---
+	totaleComanda = ws.Range(CELLA_COMANDA_TOTALE_DEST).Value
+	testo = testo & FontTag(FONT_TOTALE)
+	testo = testo & "--------------------------------" & vbCrLf
+
+	parteSinistra = "TOTALE:"
+	parteDestra = Format(totaleComanda, "0.00 \€")
+	spaziMancanti = LARGHEZZA_SCONTRINO - Len(parteSinistra) - Len(parteDestra)
+	If spaziMancanti < 1 Then spaziMancanti = 1
+
+	testo = testo & parteSinistra & "   " & parteDestra & vbCrLf
+
+	EstraiContenutoComanda = testo
+End Function
