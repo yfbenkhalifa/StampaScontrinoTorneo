@@ -370,10 +370,11 @@ Sub FinalizzaVendita()
     Dim lastOrderNumber As Long, currentOrderNumber As Long
     Dim productName As String
     Dim hasFood As Boolean, hasDrinks As Boolean
-    Dim hasStinco As Boolean, hasFocaccia As Boolean
+    Dim hasStinco As Boolean, hasFocaccia As Boolean, hasCaffe As Boolean
     Dim printComanda As Boolean
     Dim comandaNumToSave As Variant
     Dim testoComandaCibo As String, testoComandaBevande As String
+    Dim totaleGenerale As Currency
 
     Set wsCassa = ThisWorkbook.Sheets(NOME_FOGLIO_CASSA)
     Set wsVendite = ThisWorkbook.Sheets(NOME_FOGLIO_VENDITE)
@@ -428,7 +429,7 @@ Sub FinalizzaVendita()
 
     ' --- Classifica gli articoli presenti ---
     If printComanda Then
-        hasFood = False: hasDrinks = False: hasStinco = False: hasFocaccia = False
+        hasFood = False: hasDrinks = False: hasStinco = False: hasFocaccia = False: hasCaffe = False
 
         For i = PRIMA_RIGA_VENDITA_CORRENTE_CASSA To lastRowCassa
             productName = Trim(CStr(wsCassa.Cells(i, COL_PRODOTTO_CASSA).Value))
@@ -438,6 +439,8 @@ Sub FinalizzaVendita()
                 hasStinco = True
             ElseIf ProdottoContiene(productName, "focaccia") Then
                 hasFocaccia = True
+            ElseIf ProdottoContiene(productName, "caffè") Then
+                hasCaffe = True
             ElseIf Not IsStaffBirra(productName) Then
                 Select Case LCase(GetProductCategory(productName))
                     Case "cibo": hasFood = True
@@ -456,7 +459,7 @@ NextClassify:
             testoComandaCibo = BuildComandaText(wsComanda, wsCassa, lastRowCassa, _
                 currentOrderNumber, currentDateTime, _
                 "COMANDA CUCINA", "category", "cibo", _
-                Array("stinco", "focaccia", "staff birra"))
+                Array("stinco", "focaccia", "caffè", "staff birra"))
         End If
 
         If hasStinco Then
@@ -479,7 +482,15 @@ NextClassify:
             testoComandaBevande = BuildComandaText(wsComanda, wsCassa, lastRowCassa, _
                 currentOrderNumber, currentDateTime, _
                 "COMANDA BEVANDE", "category", "bere", _
-                Array("staff birra"))
+                Array("staff birra", "caffè"))
+        End If
+
+        If hasCaffe Then
+            Dim txtCaffe As String
+            txtCaffe = BuildComandaText(wsComanda, wsCassa, lastRowCassa, _
+                currentOrderNumber, currentDateTime, _
+                "COMANDA CAFFÈ", "keyword", "caffè", Empty)
+            testoComandaBevande = AppendComandaText(testoComandaBevande, txtCaffe)
         End If
     End If
 
@@ -512,6 +523,14 @@ NextClassify:
         End If
     Next i
 
+    ' --- Calcola totale generale ---
+    totaleGenerale = 0
+    For i = PRIMA_RIGA_VENDITA_CORRENTE_CASSA To lastRowCassa
+        If Trim(CStr(wsCassa.Cells(i, COL_PRODOTTO_CASSA).Value)) <> "" Then
+            totaleGenerale = totaleGenerale + wsCassa.Cells(i, COL_SUBTOTALE_CASSA).Value
+        End If
+    Next i
+
     ' --- Pulisci la cassa ---
     wsCassa.Range(COL_PRODOTTO_CASSA & PRIMA_RIGA_VENDITA_CORRENTE_CASSA & _
                   ":" & COL_SUBTOTALE_CASSA & lastRowCassa).ClearContents
@@ -529,7 +548,7 @@ NextClassify:
         End If
         On Error GoTo 0
 
-        Call ScriviFileComandaTesto(currentOrderNumber, currentDateTime, testoComandaCibo, testoComandaBevande)
+        Call ScriviFileComandaTesto(currentOrderNumber, currentDateTime, testoComandaCibo, testoComandaBevande, totaleGenerale)
     End If
 
     ThisWorkbook.Sheets(NOME_FOGLIO_CASSA).Activate
@@ -572,14 +591,25 @@ Sub ScriviFileComandaTesto( _
         ByVal numeroComanda As Long, _
         ByVal dataOra As Date, _
         ByVal testoCibo As String, _
-        ByVal testoBevande As String)
+        ByVal testoBevande As String, _
+        ByVal totaleGenerale As Currency)
 
     Dim percorso As String, f As Integer, testo As String
     Dim cartella As String
+    Dim prezzoTxt As String, spaziMancanti As Integer
 
     testo = ""
     If testoCibo <> "" Then testo = testo & testoCibo & vbCrLf & "====" & vbCrLf
-    If testoBevande <> "" Then testo = testo & testoBevande
+    If testoBevande <> "" Then testo = testo & testoBevande & vbCrLf & "====" & vbCrLf
+
+    ' --- Totale generale di tutti gli articoli ---
+    testo = testo & FontTag(FONT_TOTALE)
+    testo = testo & String(LARGHEZZA_SCONTRINO, "=") & vbCrLf
+    prezzoTxt = Format(totaleGenerale, "0.00 \€")
+    spaziMancanti = LARGHEZZA_SCONTRINO - Len("TOTALE GENERALE:") - Len(prezzoTxt)
+    If spaziMancanti < 1 Then spaziMancanti = 1
+    testo = testo & "TOTALE GENERALE:" & Space(spaziMancanti) & prezzoTxt & vbCrLf
+    testo = testo & String(LARGHEZZA_SCONTRINO, "=") & vbCrLf
 
     cartella = Environ$("USERPROFILE") & "\Desktop\Comande"
     If Dir(cartella, vbDirectory) = "" Then MkDir cartella
